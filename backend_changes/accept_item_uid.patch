@@ -1,0 +1,36 @@
+--- a/supabase/functions/rfid-api/index.ts
++++ b/supabase/functions/rfid-api/index.ts
+@@ -115,14 +115,12 @@
+ async function preview(body: ScanBody): Promise<Record<string, unknown>> {
+   // A scanned student UID is accepted as supplied; no student registration lookup.
+   if (body.item_uid === null) return { ok: true, student_name: body.student_uid, next: 'scan_item' }
+-  const items = await sql`select name from public.items where uid = ${body.item_uid} and active = true`
+-  if (items.length !== 1) throw new ApiError(404, 'item_unknown', 'Item tag not registered or inactive')
+   const loans = await sql`select student_uid from public.loans where item_uid = ${body.item_uid} and returned_at is null`
+   if (body.mode === 'borrow' && loans.length) throw new ApiError(409, 'already_borrowed', 'Item is already borrowed')
+   if (body.mode === 'return' && (!loans.length || loans[0].student_uid !== body.student_uid)) {
+     throw new ApiError(409, 'wrong_borrower', 'No active loan for this student and item')
+   }
+-  return { ok: true, student_name: body.student_uid, item_name: items[0].name, next: 'confirm' }
++  return { ok: true, student_name: body.student_uid, item_name: body.item_uid, next: 'confirm' }
+ }
+ 
+ async function commit(deviceId: string, body: ScanBody & { request_id?: string }): Promise<Record<string, unknown>> {
+@@ -144,9 +142,14 @@
+       return previous[0].response as Record<string, unknown>
+     }
+ 
+-    // Locking the item row serializes competing borrow/return attempts.
+-    const items = await tx`select name from public.items where uid = ${itemUid} and active = true for update`
+-    if (items.length !== 1) throw new ApiError(404, 'item_unknown', 'Item tag not registered or inactive')
++    // Accept new tags on first use while preserving existing item names/status.
++    // This insert and the loan roll back together if the transaction fails.
++    await tx`
++      insert into public.items(uid, name) values (${itemUid}, ${itemUid})
++      on conflict (uid) do nothing
++    `
++    // Lock the item row to serialize competing borrow/return attempts.
++    const items = await tx`select name from public.items where uid = ${itemUid} for update`
+     const loans = await tx`
+       select id, student_uid from public.loans where item_uid = ${itemUid} and returned_at is null
+     `

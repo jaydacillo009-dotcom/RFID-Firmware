@@ -1,0 +1,15 @@
+.pio/
+.venv/
+__pycache__/
+*.pyc
+.env
+rfid_config.json
+.rfid-config-*
+supabase/.temp/
+.venv-desktop/
+build/
+dist/
+*.spec
+.agents/
+.codex/
+.aws/

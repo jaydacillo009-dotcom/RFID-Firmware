@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""Run the RFID USB-to-API command-line app."""
+from rfid_cli import main
+
+if __name__ == '__main__':
+    raise SystemExit(main())

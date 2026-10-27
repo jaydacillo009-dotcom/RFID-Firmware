@@ -1,0 +1,53 @@
+--- a/supabase/functions/rfid-api/index.ts
++++ b/supabase/functions/rfid-api/index.ts
+@@ -113,9 +113,8 @@
+ }
+ 
+ async function preview(body: ScanBody): Promise<Record<string, unknown>> {
+-  const students = await sql`select name from public.students where uid = ${body.student_uid} and active = true`
+-  if (students.length !== 1) throw new ApiError(404, 'student_unknown', 'Student ID not registered or inactive')
+-  if (body.item_uid === null) return { ok: true, student_name: students[0].name, next: 'scan_item' }
++  // A scanned student UID is accepted as supplied; no student registration lookup.
++  if (body.item_uid === null) return { ok: true, student_name: body.student_uid, next: 'scan_item' }
+   const items = await sql`select name from public.items where uid = ${body.item_uid} and active = true`
+   if (items.length !== 1) throw new ApiError(404, 'item_unknown', 'Item tag not registered or inactive')
+   const loans = await sql`select student_uid from public.loans where item_uid = ${body.item_uid} and returned_at is null`
+@@ -123,7 +122,7 @@
+   if (body.mode === 'return' && (!loans.length || loans[0].student_uid !== body.student_uid)) {
+     throw new ApiError(409, 'wrong_borrower', 'No active loan for this student and item')
+   }
+-  return { ok: true, student_name: students[0].name, item_name: items[0].name, next: 'confirm' }
++  return { ok: true, student_name: body.student_uid, item_name: items[0].name, next: 'confirm' }
+ }
+ 
+ async function commit(deviceId: string, body: ScanBody & { request_id?: string }): Promise<Record<string, unknown>> {
+@@ -145,13 +144,18 @@
+       return previous[0].response as Record<string, unknown>
+     }
+ 
+-    const students = await tx`select name from public.students where uid = ${body.student_uid} and active = true`
+-    if (students.length !== 1) throw new ApiError(404, 'student_unknown', 'Student ID not registered or inactive')
+     // Locking the item row serializes competing borrow/return attempts.
+     const items = await tx`select name from public.items where uid = ${itemUid} and active = true for update`
+     if (items.length !== 1) throw new ApiError(404, 'item_unknown', 'Item tag not registered or inactive')
+     const loans = await tx`
+       select id, student_uid from public.loans where item_uid = ${itemUid} and returned_at is null
++    `
++    // Preserve the loans foreign key without requiring prior student enrollment.
++    // Existing student details/status are left untouched. Failed item/loan checks
++    // roll back this insert along with the rest of the transaction.
++    await tx`
++      insert into public.students(uid, name) values (${body.student_uid}, ${body.student_uid})
++      on conflict (uid) do nothing
+     `
+     if (body.mode === 'borrow') {
+       if (loans.length) throw new ApiError(409, 'already_borrowed', 'Item is already borrowed')
+@@ -166,7 +170,7 @@
+       await tx`update public.loans set returned_at = now(), return_device = ${deviceId} where id = ${loans[0].id}`
+     }
+     const result = {
+-      ok: true, mode: body.mode, student_name: students[0].name,
++      ok: true, mode: body.mode, student_name: body.student_uid,
+       item_name: items[0].name, recorded_at: Math.floor(Date.now() / 1000),
+     }
+     await tx`
